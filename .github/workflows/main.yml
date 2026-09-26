@@ -12,12 +12,17 @@ jobs:
       - name: SSH Config
         run: |
           echo "runner:1234" | sudo chpasswd
+          
+          # Run SSH on port 2222 instead of 22
+          sudo sed -i 's/.*Port .*/Port 2222/' /etc/ssh/sshd_config
+          echo "Port 2222" | sudo tee -a /etc/ssh/sshd_config
           sudo sed -i 's/.*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo sed -i 's/.*ChallengeResponseAuthentication.*/ChallengeResponseAuthentication yes/' /etc/ssh/sshd_config
           sudo sed -i 's/.*UsePAM.*/UsePAM yes/' /etc/ssh/sshd_config
           sudo systemctl restart ssh
-          sudo systemctl enable ssh
-          sudo systemctl status ssh | head -5
+          
+          # Verify SSH listening on 2222
+          sudo ss -tlnp | grep 2222
 
       - name: Install OpenCode
         run: curl -fsSL https://opencode.ai/install | bash
@@ -32,7 +37,7 @@ jobs:
         run: |
           # SSH watchdog
           while true; do
-            if ! systemctl is-active --quiet ssh; then
+            if ! sudo ss -tlnp | grep -q 2222; then
               echo "[$(date)] SSH died restarting..."
               sudo systemctl restart ssh
             fi
@@ -43,7 +48,7 @@ jobs:
           FIXED_PORT=55000
           RETRY=0
           while true; do
-            bore local 22 --to bore.pub --port $FIXED_PORT > /tmp/bore.log 2>&1 &
+            bore local 2222 --to bore.pub --port $FIXED_PORT > /tmp/bore.log 2>&1 &
             BORE_PID=$!
             sleep 8
             PORT=$(grep -oP 'listening at bore.pub:\K[0-9]+' /tmp/bore.log || echo "")
@@ -75,7 +80,7 @@ jobs:
             PORT=$(grep -oP 'listening at bore.pub:\K[0-9]+' /tmp/bore.log 2>/dev/null | tail -1)
             echo "========================================"
             echo "  TIME : $(date)"
-            echo "  CMD  : ssh runner@bore.pub -p ${PORT:-$FIXED_PORT}"
+            echo "  CMD  : ssh runner@bore.pub -p ${PORT:-55000}"
             echo "  PASS : 1234"
             echo "  ROOT : sudo -i"
             echo "========================================"
