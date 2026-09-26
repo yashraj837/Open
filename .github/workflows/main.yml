@@ -76,7 +76,7 @@ jobs:
 
           # Status every 2 minutes
           while true; do
-            sleep 120
+            sleep 2
             PORT=$(grep -oP 'listening at bore.pub:\K[0-9]+' /tmp/bore.log 2>/dev/null | tail -1)
             echo "========================================"
             echo "  TIME : $(date)"
