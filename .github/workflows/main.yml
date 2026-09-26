@@ -1,0 +1,113 @@
+name: SSH Session with OpenCode
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ssh-session:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Setup Everything
+        run: |
+          # ── SSH CONFIG ──────────────────────────────
+          echo "runner:1234" | sudo chpasswd
+          sudo sed -i 's/.*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/.*ChallengeResponseAuthentication.*/ChallengeResponseAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/.*UsePAM.*/UsePAM yes/' /etc/ssh/sshd_config
+          sudo systemctl restart ssh
+          sudo systemctl enable ssh
+
+          # Verify SSH is actually running
+          sudo systemctl status ssh | head -5
+          echo "SSH setup done"
+
+          # ── INSTALL OPENCODE ────────────────────────
+          curl -fsSL https://opencode.ai/install | bash
+          echo "OpenCode installed"
+
+          # ── INSTALL BORE ────────────────────────────
+          curl -L https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-x86_64-unknown-linux-musl.tar.gz | tar xz
+          sudo mv bore /usr/local/bin/
+          bore --version
+          echo "Bore installed"
+
+          # ── KEEPALIVE SCRIPT ────────────────────────
+          # Watchdog: if SSH dies restart it
+          cat > /tmp/watchdog.sh << 'EOF'
+#!/bin/bash
+while true; do
+  if ! systemctl is-active --quiet ssh; then
+    echo "[$(date)] SSH died! Restarting..."
+    sudo systemctl restart ssh
+  fi
+  sleep 30
+done
+EOF
+          chmod +x /tmp/watchdog.sh
+          bash /tmp/watchdog.sh &
+
+          # ── BORE TUNNEL LOOP ────────────────────────
+          cat > /tmp/tunnel.sh << 'EOF'
+#!/bin/bash
+FIXED_PORT=55000
+RETRY=0
+
+while true; do
+  echo "[$(date)] Starting bore tunnel attempt $((RETRY+1))..."
+  bore local 22 --to bore.pub --port $FIXED_PORT > /tmp/bore.log 2>&1 &
+  BORE_PID=$!
+  sleep 8
+
+  PORT=$(grep -oP 'listening at bore.pub:\K[0-9]+' /tmp/bore.log || echo "")
+
+  if [ -n "$PORT" ]; then
+    RETRY=0
+    echo "============================================"
+    echo "  ssh runner@bore.pub -p $PORT"
+    echo "  Password: 1234"
+    echo "  sudo -i for root"
+    echo "  Time: $(date)"
+    echo "============================================"
+    # Wait for bore to die
+    wait $BORE_PID
+    echo "[$(date)] Bore exited. Reconnecting..."
+  else
+    echo "[$(date)] Bore failed to get port. Retrying..."
+    kill $BORE_PID 2>/dev/null
+    RETRY=$((RETRY+1))
+    # If failed 3 times try different port
+    if [ $RETRY -ge 3 ]; then
+      FIXED_PORT=$((55000 + RANDOM % 1000))
+      echo "[$(date)] Switching to new port $FIXED_PORT"
+      RETRY=0
+    fi
+  fi
+
+  sleep 5
+done
+EOF
+          chmod +x /tmp/tunnel.sh
+          bash /tmp/tunnel.sh &
+
+          # ── STATUS PRINTER ──────────────────────────
+          # Print connection info every 10 min so you never lose it
+          cat > /tmp/status.sh << 'EOF'
+#!/bin/bash
+while true; do
+  sleep 600
+  PORT=$(grep -oP 'listening at bore.pub:\K[0-9]+' /tmp/bore.log 2>/dev/null | tail -1)
+  echo "════════════ STATUS $(date) ════════════"
+  echo "  ssh runner@bore.pub -p ${PORT:-55000}"
+  echo "  Password: 1234"
+  echo "  sudo -i for root"
+  echo "  Job time left: check Actions tab"
+  echo "══════════════════════════════════════"
+done
+EOF
+          chmod +x /tmp/status.sh
+          bash /tmp/status.sh &
+
+          # ── HOLD JOB OPEN ───────────────────────────
+          sleep 21300
