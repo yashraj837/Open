@@ -19,17 +19,10 @@ jobs:
           echo "PermitRootLogin yes" | sudo tee -a /etc/ssh/sshd_config
           sudo systemctl restart ssh
           sleep 2
-          sudo ss -tlnp | grep 2222 || echo "SSH not on 2222 yet"
-          sudo systemctl status ssh || true
+          sudo ss -tlnp | grep 2222 || true
 
       - name: Install OpenCode
         run: curl -fsSL https://opencode.ai/install | bash || true
-
-      - name: Install Bore
-        run: |
-          curl -L https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-x86_64-unknown-linux-musl.tar.gz | tar xz
-          sudo mv bore /usr/local/bin/
-          bore --version
 
       - name: Start Tunnel and Keep Alive
         run: |
@@ -44,43 +37,53 @@ jobs:
             sleep 30
           done &
 
-          # Bore tunnel loop
-          FIXED_PORT=55000
-          RETRY=0
+          # Pinggy TCP tunnel — restart every 55 min before 60 min timeout
           while true; do
-            bore local 2222 --to bore.pub --port $FIXED_PORT > /tmp/bore.log 2>&1 &
-            BORE_PID=$!
+            echo "[$(date)] Starting pinggy tunnel..."
+            ssh -p 443 \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=3 \
+              -R0:localhost:2222 \
+              tcp@a.pinggy.io > /tmp/pinggy.log 2>&1 &
+            PINGGY_PID=$!
             sleep 8
-            PORT=$(grep -oP 'listening at bore.pub:\K[0-9]+' /tmp/bore.log || echo "")
-            if [ -n "$PORT" ]; then
-              RETRY=0
+
+            # Parse TCP connection info from log
+            TCPURL=$(grep -oP 'tcp://\S+' /tmp/pinggy.log | head -1 || echo "")
+            HOST=$(echo $TCPURL | grep -oP '(?<=tcp://)[^:]+' || echo "")
+            PORT=$(echo $TCPURL | grep -oP '(?<=:)\d+$' || echo "")
+
+            if [ -n "$HOST" ] && [ -n "$PORT" ]; then
               echo "========================================"
-              echo "  CMD  : ssh runner@bore.pub -p $PORT"
+              echo "  CMD  : ssh runner@$HOST -p $PORT"
               echo "  PASS : 1234"
               echo "  ROOT : sudo -i"
               echo "  TIME : $(date)"
+              echo "  NOTE : URL changes every 60min"
               echo "========================================"
-              wait $BORE_PID
-              echo "[$(date)] Bore dropped. Reconnecting..."
+              # Kill after 55 min and restart fresh
+              sleep 3300
+              kill $PINGGY_PID 2>/dev/null
+              echo "[$(date)] Restarting pinggy before 60min timeout..."
             else
-              kill $BORE_PID 2>/dev/null
-              RETRY=$((RETRY+1))
-              if [ $RETRY -ge 3 ]; then
-                FIXED_PORT=$((55000 + RANDOM % 1000))
-                echo "[$(date)] Port busy switching to $FIXED_PORT"
-                RETRY=0
-              fi
+              echo "[$(date)] Pinggy failed to get URL, retrying..."
+              cat /tmp/pinggy.log
+              kill $PINGGY_PID 2>/dev/null
             fi
             sleep 5
           done &
 
           # Status every 2 minutes
           while true; do
-            sleep 2
-            PORT=$(grep -oP 'listening at bore.pub:\K[0-9]+' /tmp/bore.log 2>/dev/null | tail -1)
+            sleep 120
+            TCPURL=$(grep -oP 'tcp://\S+' /tmp/pinggy.log 2>/dev/null | tail -1)
+            HOST=$(echo $TCPURL | grep -oP '(?<=tcp://)[^:]+' 2>/dev/null || echo "check logs")
+            PORT=$(echo $TCPURL | grep -oP '(?<=:)\d+$' 2>/dev/null || echo "?")
             echo "========================================"
             echo "  TIME : $(date)"
-            echo "  CMD  : ssh runner@bore.pub -p ${PORT:-55000}"
+            echo "  CMD  : ssh runner@$HOST -p $PORT"
             echo "  PASS : 1234"
             echo "  ROOT : sudo -i"
             echo "========================================"
