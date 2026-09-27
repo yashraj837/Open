@@ -9,84 +9,41 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: SSH Config
+      - name: Install OpenCode
+        run: curl -fsSL https://opencode.ai/install | bash || true
+
+      - name: Setup SSH + sshx
         run: |
+          set +e
+
+          # Setup SSH
           echo "runner:1234" | sudo chpasswd
           echo "Port 2222" | sudo tee -a /etc/ssh/sshd_config
           echo "PasswordAuthentication yes" | sudo tee -a /etc/ssh/sshd_config
           echo "ChallengeResponseAuthentication yes" | sudo tee -a /etc/ssh/sshd_config
           echo "UsePAM yes" | sudo tee -a /etc/ssh/sshd_config
-          echo "PermitRootLogin yes" | sudo tee -a /etc/ssh/sshd_config
           sudo systemctl restart ssh
           sleep 2
-          sudo ss -tlnp | grep 2222 || true
 
-      - name: Install OpenCode
-        run: curl -fsSL https://opencode.ai/install | bash || true
+          # Install sshx
+          curl -sSf https://sshx.io/get | sh
 
-      - name: Start Tunnel and Keep Alive
-        run: |
-          set +e
+          # Start sshx
+          sshx > /tmp/sshx.log 2>&1 &
+          sleep 5
 
-          # SSH watchdog
+          # Print URL every 2 min
           while true; do
-            if ! sudo ss -tlnp | grep -q 2222; then
-              echo "[$(date)] SSH died restarting..."
-              sudo systemctl restart ssh
-            fi
-            sleep 30
-          done &
-
-          # Pinggy TCP tunnel — restart every 55 min before 60 min timeout
-          while true; do
-            echo "[$(date)] Starting pinggy tunnel..."
-            ssh -p 443 \
-              -o StrictHostKeyChecking=no \
-              -o UserKnownHostsFile=/dev/null \
-              -o ServerAliveInterval=30 \
-              -o ServerAliveCountMax=3 \
-              -R0:localhost:2222 \
-              tcp@a.pinggy.io > /tmp/pinggy.log 2>&1 &
-            PINGGY_PID=$!
-            sleep 8
-
-            # Parse TCP connection info from log
-            TCPURL=$(grep -oP 'tcp://\S+' /tmp/pinggy.log | head -1 || echo "")
-            HOST=$(echo $TCPURL | grep -oP '(?<=tcp://)[^:]+' || echo "")
-            PORT=$(echo $TCPURL | grep -oP '(?<=:)\d+$' || echo "")
-
-            if [ -n "$HOST" ] && [ -n "$PORT" ]; then
-              echo "========================================"
-              echo "  CMD  : ssh runner@$HOST -p $PORT"
-              echo "  PASS : 1234"
-              echo "  ROOT : sudo -i"
-              echo "  TIME : $(date)"
-              echo "  NOTE : URL changes every 60min"
-              echo "========================================"
-              # Kill after 55 min and restart fresh
-              sleep 3300
-              kill $PINGGY_PID 2>/dev/null
-              echo "[$(date)] Restarting pinggy before 60min timeout..."
-            else
-              echo "[$(date)] Pinggy failed to get URL, retrying..."
-              cat /tmp/pinggy.log
-              kill $PINGGY_PID 2>/dev/null
-            fi
-            sleep 5
-          done &
-
-          # Status every 2 minutes
-          while true; do
-            sleep 120
-            TCPURL=$(grep -oP 'tcp://\S+' /tmp/pinggy.log 2>/dev/null | tail -1)
-            HOST=$(echo $TCPURL | grep -oP '(?<=tcp://)[^:]+' 2>/dev/null || echo "check logs")
-            PORT=$(echo $TCPURL | grep -oP '(?<=:)\d+$' 2>/dev/null || echo "?")
             echo "========================================"
             echo "  TIME : $(date)"
-            echo "  CMD  : ssh runner@$HOST -p $PORT"
-            echo "  PASS : 1234"
-            echo "  ROOT : sudo -i"
+            echo "  SSHX URL:"
+            grep -oP 'https://sshx\.io/s#\S+' /tmp/sshx.log | tail -1
+            echo ""
+            echo "  Once inside sshx, run this for Termux:"
+            echo "  ssh -p 443 -o StrictHostKeyChecking=no -R0:localhost:2222 tcp@a.pinggy.io"
+            echo "  Then connect from Termux with the printed URL"
             echo "========================================"
+            sleep 120
           done &
 
           sleep 21300
