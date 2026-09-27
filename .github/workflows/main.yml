@@ -28,22 +28,26 @@ jobs:
           # Install sshx
           curl -sSf https://sshx.io/get | sh
 
-          # Start sshx
-          sshx > /tmp/sshx.log 2>&1 &
-          sleep 5
+          # Start sshx — pipe both stdout and stderr to log AND terminal
+          sshx 2>&1 | tee /tmp/sshx.log &
+          sleep 8
 
-          # Print URL every 2 min
+          # Print whatever sshx output
+          echo "=== SSHX OUTPUT ==="
+          cat /tmp/sshx.log
+          echo "==================="
+
+          # Status every 2 minutes
           while true; do
+            sleep 120
             echo "========================================"
             echo "  TIME : $(date)"
             echo "  SSHX URL:"
-            grep -oP 'https://sshx\.io/s#\S+' /tmp/sshx.log | tail -1
+            cat /tmp/sshx.log
             echo ""
-            echo "  Once inside sshx, run this for Termux:"
-            echo "  ssh -p 443 -o StrictHostKeyChecking=no -R0:localhost:2222 tcp@a.pinggy.io"
-            echo "  Then connect from Termux with the printed URL"
+            echo "  Once inside sshx terminal run:"
+            echo "  ssh -p 443 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R0:localhost:2222 tcp@a.pinggy.io"
             echo "========================================"
-            sleep 120
           done &
 
           sleep 21300
